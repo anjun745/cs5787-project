@@ -11,7 +11,7 @@ import copy
 from datasets import AttrDict
 from omegaconf import OmegaConf
 from datasets.actorshq_dataset import ActorsHQDataset
-from datasets.goliath_dataset import BodyDataset
+from datasets.aist_dataset import AISTDataset
 from datasets import load_static_assets
 from lib.segmentation import Segmenter
 from lib.smplman import Smplman
@@ -88,7 +88,7 @@ def training(train_loader, warmup_loader, config, static_assets):
     bg_color = "white" if "background" not in config.train else config.train.background
     Segmenter(config, static_assets, body_model).run()
     batcher = Batcher(config, body_model)
-    vgg_loss = VGGLoss().cuda()
+    vgg_loss = VGGLoss().cuda() if config.train.enable_vgg_from > 0 and config.train.vgg_weight > 0 else None
     pc_renderer = PCRenderer(bg_color == "white").cuda()
     mesh_renderer = Renderer(bg_color == "white").cuda()
     trainer = Trainer(config, static_assets)
@@ -405,6 +405,7 @@ def create_loader(config):
         static_assets["smplx"] = copy.deepcopy(dataset.smplx)
         dataset_warmup = ActorsHQDataset(test_camera=[test_camera], warmup=True, **config.data)
     elif name == "goliath":
+        from datasets.goliath_dataset import BodyDataset
         dataset = BodyDataset(
             root_path=config.data.root_path,
             split="train",
@@ -417,6 +418,10 @@ def create_loader(config):
         static_assets["lbs_template_verts"] = dataset.load_template_mesh()
         static_assets["lbs_scale"] = dataset.load_skeleton_scales()
         static_assets["camera_ids"] = list(dataset.cameras)
+    elif name == "aist":
+        dataset = AISTDataset(test_camera=test_camera, **config.data)
+        static_assets = AttrDict({"camera_ids": list(dataset.cameras)})
+        dataset_warmup = AISTDataset(test_camera=test_camera, warmup=True, **config.data)
     else:
         raise RuntimeError("Dataset not supported!")
 
@@ -429,7 +434,7 @@ def create_loader(config):
         num_workers=num_workers,
         worker_init_fn=seed_worker,
         generator=generator,
-        persistent_workers=True,
+        persistent_workers=num_workers > 0,
         pin_memory=True,
     )
 
@@ -441,6 +446,9 @@ def create_loader(config):
 
 if __name__ == "__main__":
     config = config = OmegaConf.load(sys.argv[1])
+
+    if not os.path.isabs(config.assets):
+        config.assets = os.path.abspath(config.assets)
 
     if not os.path.isabs(config.train.run_dir):
         config.train.run_dir = os.path.join(config.train.run_dir)

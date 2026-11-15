@@ -56,6 +56,9 @@ nvcc_args.extend(
         "-gencode=arch=compute_90,code=sm_90",
     ]
 )
+if os.environ.get("D3GA_CUDA_ARCH"):
+    arch = os.environ["D3GA_CUDA_ARCH"]
+    nvcc_args.append(f"-gencode=arch=compute_{arch},code=sm_{arch}")
 
 bvh_extra_compile_args = {'nvcc': ['-DPRINT_TIMINGS=0',
                                    '-DDEBUG_PRINT=0',

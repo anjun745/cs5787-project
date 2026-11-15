@@ -152,6 +152,12 @@ class Segmenter:
         if os.path.exists(face_to_label_path):
             return
 
+        # A single whole-body cage does not need semantic part transfer.
+        if list(self.config.cages.keys()) == ["body"] and self.config.cages.body.label_id == [-1]:
+            np.save(face_to_label_path, np.zeros(len(self.body_model.body_template_faces), dtype=np.int32))
+            logger.info("Using a whole-body cage; skipped semantic part transfer")
+            return
+
         loader = self.get_loader()
 
         view_per_camera = []

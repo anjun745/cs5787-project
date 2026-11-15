@@ -14,3 +14,10 @@ scripts/output
 runs_train_py
 pose_pca/*
 experiments/*
+/outputs/
+/runtime_assets/
+/body_models/
+*.egg-info/
+__pycache__/
+*.pth
+*.mp4

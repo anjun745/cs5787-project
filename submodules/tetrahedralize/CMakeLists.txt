@@ -26,8 +26,6 @@ list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(libigl)
 include_directories("include")
 
-# Enable the target igl::glfw
-igl_include(glfw)
 igl_include(copyleft tetgen)
 
 # Add source files
@@ -38,7 +36,7 @@ add_executable(${PROJECT_NAME} ${SRC_FILES})
 
 # Link libraries
 if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
-  target_link_libraries(${PROJECT_NAME} PUBLIC igl::glfw igl_copyleft::tetgen stdc++fs)
+  target_link_libraries(${PROJECT_NAME} PUBLIC igl::core igl_copyleft::tetgen stdc++fs)
 else()
-  target_link_libraries(${PROJECT_NAME} PUBLIC igl::glfw igl_copyleft::tetgen)
+  target_link_libraries(${PROJECT_NAME} PUBLIC igl::core igl_copyleft::tetgen)
 endif()

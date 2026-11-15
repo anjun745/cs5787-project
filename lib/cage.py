@@ -91,7 +91,8 @@ class CageBase(nn.Module):
             self.mc_source = self.filter_using_labels(to_trimesh(source, faces))
             self.mc_source.export(self.src + "/mc_source.ply")
             logger.warning(f"\nIf necessary clean {self.src}/mc_source.ply by using Meshlab smoothing function with post-cleaning process.\nOpen the mesh, fix and save with the same name [MeshLab->Export Mesh]\nPress enter after finish to continute...")
-            input("")
+            if not self.config.get("auto_build_cages", False):
+                input("")
             logger.info("Continuing...")
 
         self.mc_source = trimesh.load(self.src + "/mc_source.ply", process=False)
@@ -123,7 +124,8 @@ class CageBase(nn.Module):
         logger.warning(f"\nCheck {self.src}/cage.ply and use:\nTaubin Smoothing [MeshLab->Filters->Smoothing->Taubin (default settings)].\n" +
                        "TetGen can explode in the case of self-intersecting faces (which happens often after cage generatin)." + 
                        "Meshlab will post-clean and smooth the cage.\nPress enter after finish to continute...")
-        input("")
+        if not self.config.get("auto_build_cages", False):
+            input("")
         logger.info("Continuing...")
 
         self.tetgen.run()

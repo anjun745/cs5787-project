@@ -91,6 +91,10 @@ class SMPLlayer(nn.Module):
                              to_tensor(to_np(self.faces, dtype=np.int64),
                                        dtype=torch.long))
         for key in ['J_regressor', 'v_template', 'weights', 'lmk_faces_idx', 'lmk_bary_coords']:
+            # Plain SMPL releases do not contain the optional SMPL-X landmark
+            # tables. They are not needed for mesh/LBS training.
+            if key not in data:
+                continue
             val = to_tensor(to_np(data[key]), dtype=dtype)
             self.register_buffer(key, val)
 

@@ -19,7 +19,6 @@ from models.embeddings import Embedding
 
 from models.learnable_blur import LearnableBlur
 from models.mlp import FaceDecoder, ShadowDecoder
-from utils.pca_utils import build_pca
 
 from torchvision.transforms.functional import gaussian_blur
 

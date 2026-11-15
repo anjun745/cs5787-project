@@ -15,7 +15,6 @@ import cv2
 import json
 from pathlib import Path
 from scipy import ndimage
-import joblib
 
 from . import load_opencv_calib
 
@@ -193,6 +192,7 @@ class ActorsHQDataset(Dataset):
         return self.n_frames()
 
     def load_pca(self):
+        import joblib
         actor_name = [part for part in self.image.split(os.sep) if "Actor" in part][0]
         self.smplx_pca = joblib.load(f'pose_pca/pca_{actor_name}.ckpt')
         logger.info(f"PCA checkpoint has been restored for {actor_name}!")

@@ -13,7 +13,6 @@ from models.garment_net import GarmentNet
 import logging
 from pathlib import Path
 import re
-import pandas as pd
 
 from renderer import render
 from utils.load_module import instantiate
@@ -48,10 +47,16 @@ class Trainer:
                 fmts = dict(sequence=seq)
                 src = config.data.smplx_poses.format(**fmts)
                 n_frames = len(glob(f"{src}/*.json")) - config.data.n_testing_frames
-        else:
+        elif config.dataset_name == "goliath":
+            import pandas as pd
             df = pd.read_csv(config.data.root_path + f"/frame_splits_list.csv")
             frame_list = df[df.split == "train"].frame.tolist()
             n_frames = len(frame_list)
+        elif config.dataset_name == "aist":
+            from datasets.aist_dataset import AISTDataset
+            n_frames = len(AISTDataset(test_camera=config.train.test_camera, **config.data))
+        else:
+            raise RuntimeError(f"Unsupported dataset: {config.dataset_name}")
 
         logger.info(f"Trainer initialized with {n_frames}")
 
@@ -196,11 +201,9 @@ class Trainer:
             return
 
         if name is not None:
-            path = name
+            path = os.path.join(self.model_path, name)
         else:
-            path = "/checkpoints/chkpnt" + str(iteration).zfill(6) + ".pth"
-
-        path = self.model_path + path
+            path = os.path.join(self.model_path, "checkpoints", "chkpnt" + str(iteration).zfill(6) + ".pth")
 
         model_params = (self.model.state_dict(), self.optimizer.state_dict(), self.scheduler.state_dict())
 

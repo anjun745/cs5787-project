@@ -35,14 +35,18 @@ def write_text(img, text, fontColor=(0, 0, 0), thickness=2, bottom=False, X=15):
     H, W, C = img.shape
     font_scale = get_optimal_font_scale(" " * 25, W)
     Y = int(font_scale * 30) if not bottom else H - int(font_scale * 15)
+    # OpenCV 5 only draws text on integer images. Render on an 8-bit copy,
+    # then return the original float [0, 1] convention used by training.
+    draw_img = np.clip(img * 255.0, 0, 255).astype(np.uint8)
+    draw_color = tuple(int(np.clip(c, 0, 1) * 255) for c in fontColor)
     img = put_text(
-        img,
+        draw_img,
         text,
         fontScale=font_scale,
         thickness=thickness,
-        fontColor=fontColor,
+        fontColor=draw_color,
         pos=(X, Y),
-    )
+    ).astype(np.float32) / 255.0
 
     if convert_back:
         return torch.from_numpy(img).permute(2, 0, 1).to(device)

@@ -10,7 +10,6 @@ import torch
 import trimesh
 from  utils.graphics_utils import BasicPointCloud
 import numpy as np
-import open3d
 
 
 def storePly(path, xyz, rgb, normals):
@@ -59,6 +58,7 @@ def to_trimesh(v, f, batch=0):
 
 
 def save_mesh(vertices, faces, colors=None, filename="test.ply"):
+    import open3d
     mesh = open3d.geometry.TriangleMesh()
     mesh.vertices = open3d.utility.Vector3dVector(vertices)
     mesh.triangles = open3d.utility.Vector3iVector(faces)

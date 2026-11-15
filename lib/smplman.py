@@ -65,12 +65,13 @@ class Smplman(CageBase):
         return homo
 
     def create_body_model(self):
+        joint_regressor = self.config.data.get("joint_regressor", None)
         self.lbs_module = SMPLlayer(
             self.config.data.smplx_model,
             model_type=self.config.model_type,
             gender="neutral",
-            use_joints=True,
-            regressor_path=self.config.data.joint_regressor
+            use_joints=joint_regressor is not None,
+            regressor_path=joint_regressor
         ).cuda()
 
         self.body_template_faces = self.lbs_module.faces_tensor

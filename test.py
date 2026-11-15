@@ -11,12 +11,13 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import cv2
 from tqdm import tqdm
 from datasets import AttrDict
 from torch.utils.data import DataLoader
 from datasets import load_static_assets
-from datasets.goliath_dataset import BodyDataset
 from datasets.actorshq_dataset import ActorsHQDataset
+from datasets.aist_dataset import AISTDataset
 from lib.smplman import Smplman
 from lib.blueman import Blueman
 from models.trainer import Trainer
@@ -25,13 +26,11 @@ from recorder.mesh_renderer import Renderer
 from recorder.pc_renderer import PCRenderer
 from lib.batch import Batcher
 import torch as th
-from utils.pca_utils import build_pca
 import torch.nn.functional as F
 import torchvision
 import os
 
 from omegaconf import OmegaConf
-import ffmpeg
 
 from globus import *
 from utils.text_helpers import write_text
@@ -205,16 +204,23 @@ def recorder(cam_trajectory, trainer, batcher, dataset, render_path, run_name, b
             f.write(f"PSNR: {(psnr / n):.5f}, ")
             f.write(f"LPIPS: {(lpips / n):.5f}\n")
 
-    glob_path = f"{render_path}/grid/*.png"
-    outputs = ffmpeg.input(glob_path, pattern_type="glob", r=DEFAULT_FPS)
-    videos = [
-        outputs.output(f"{render_path}_{run_name}_LQ.mp4", pix_fmt='yuv420p', crf=20)
-        .overwrite_output()
-        .run_async(),
-    ]
-
-    for value in videos:
-        value.wait()
+    frame_paths = sorted(glob(f"{render_path}/grid/*.png"))
+    if frame_paths:
+        first = cv2.imread(frame_paths[0])
+        height, width = first.shape[:2]
+        video_path = f"{render_path}_{run_name}.mp4"
+        writer = cv2.VideoWriter(
+            video_path,
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            DEFAULT_FPS,
+            (width, height),
+        )
+        if not writer.isOpened():
+            raise RuntimeError(f"Could not create video {video_path}")
+        for frame_path in frame_paths:
+            writer.write(cv2.imread(frame_path))
+        writer.release()
+        logger.info(f"Saved evaluation video to {video_path}")
 
     progress_bar.close()
 
@@ -237,6 +243,7 @@ def create_dataset(config, cameras_subset=None):
         )
         static_assets["camera_ids"] = list(dataset.cameras.keys())
     elif name == "goliath":
+        from datasets.goliath_dataset import BodyDataset
         dataset = BodyDataset(
             root_path=config.data.root_path,
             split="test",
@@ -248,6 +255,13 @@ def create_dataset(config, cameras_subset=None):
         static_assets["lbs_template_verts"] = dataset.load_template_mesh()
         static_assets["lbs_scale"] = dataset.load_skeleton_scales()
         static_assets["camera_ids"] = list(dataset.cameras)
+    elif name == "aist":
+        dataset = AISTDataset(
+            test_camera=config.train.test_camera,
+            eval=True,
+            **config.data,
+        )
+        static_assets = AttrDict({"camera_ids": list(dataset.cameras)})
     else:
         raise NotImplementedError(f"Dataset {name} not implemented!")
 
@@ -270,6 +284,7 @@ def build_pca_pillow(model_state, n_components=15):
     logger.info(f"Restored {len(M)} refined SMPLX poses for PCA building!")
     if len(M) == 0:
         return None
+    from utils.pca_utils import build_pca
     pca = build_pca("", M, n_components=n_components, save=False)
     return pca
 
@@ -328,6 +343,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 2:
         iteration = sys.argv[2]
     config = config = OmegaConf.load(config_path)
+    if not os.path.isabs(config.assets):
+        config.assets = os.path.abspath(config.assets)
     run_name = Path(config_path).stem
 
     config.train.use_background = False
@@ -336,7 +353,7 @@ if __name__ == "__main__":
     config.train.erode_mask = False
     config.train.close_holes = False
 
-    DEFAULT_FPS = config.train.fps
+    DEFAULT_FPS = config.train.get("eval_fps", config.train.fps)
 
     logger.info(f"Generating video with DEFAULT_FPS={DEFAULT_FPS}")
 
