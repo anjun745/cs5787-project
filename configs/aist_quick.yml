@@ -72,6 +72,16 @@ train:
   blur_weight: 0.0
   bg_weight: 0.0
 
+  # DNGaussian-inspired sparse-view supervision. Generate cached priors,
+  # set data.depth_root above, then enable this block.
+  depth_regularization:
+    enabled: false
+    weight: 0.05
+    start_iteration: 1000
+    patch_size: 32
+    local_weight: 0.1
+    target_type: inverse_depth
+
 frame_embedder:
   n_dims: 16
 color_mlp:

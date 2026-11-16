@@ -16,6 +16,8 @@ class AISTDataset(Dataset):
         camera_file,
         n_testing_frames=20,
         test_camera="c01",
+        depth_root=None,
+        depth_format="npy",
         eval=False,
         warmup=False,
         **kwargs,
@@ -24,6 +26,8 @@ class AISTDataset(Dataset):
         self.eval = eval
         self.warmup = warmup
         self.test_camera = test_camera
+        self.depth_root = Path(depth_root) if depth_root else None
+        self.depth_format = depth_format.lstrip(".")
         self.internal_counter = 0
         self.warmup_idx = 0
 
@@ -130,4 +134,26 @@ class AISTDataset(Dataset):
             "camera_ids": [camera_id],
         }
         sample.update(self.cameras[camera_id])
+
+        if self.depth_root is not None:
+            depth_path = self.depth_root / camera_id / f"{frame:06d}.{self.depth_format}"
+            if not depth_path.exists():
+                raise FileNotFoundError(f"Missing depth prior: {depth_path}")
+            if self.depth_format == "npy":
+                depth = np.load(depth_path).astype(np.float32)
+            else:
+                depth = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
+                if depth is None:
+                    raise FileNotFoundError(f"Could not read depth prior: {depth_path}")
+                depth = depth.astype(np.float32)
+            if depth.ndim == 3:
+                depth = depth[..., 0]
+            if depth.shape != foreground.shape[-2:]:
+                depth = cv2.resize(
+                    depth,
+                    (foreground.shape[-1], foreground.shape[-2]),
+                    interpolation=cv2.INTER_LINEAR,
+                )
+            sample["depth_prior"] = depth[None]
+
         return sample

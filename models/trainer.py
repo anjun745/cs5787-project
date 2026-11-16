@@ -141,6 +141,7 @@ class Trainer:
             "blur_weights": blur_weights,
             "pred_silhouette": pred_silhouette,
             "pred_image": pred_image,
+            "pred_inv_depth": rasterized["inv_depth"],
             "bg_color": bg_color_cuda
         }
 

@@ -129,7 +129,7 @@ def render(batch, pkg, bg_color, colors_precomp=None, measure_time=False, solid_
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
     with cuda_timer("Rastrizing", measure_time):
-        rendered_image = rasterizer(
+        rendered_image, _, rendered_invdepth = rasterizer(
             means3D=means3D,
             means2D=means2D,
             shs=shs,
@@ -138,8 +138,12 @@ def render(batch, pkg, bg_color, colors_precomp=None, measure_time=False, solid_
             scales=scales,
             rotations=rotations,
             cov3D_precomp=cov3D_precomp,
-        )[0]
+        )
 
     return {
-        "render": paste(rendered_image, crop)
+        "render": paste(rendered_image, crop),
+        # The bundled differentiable rasterizer accumulates alpha-weighted
+        # inverse depth. Keep it differentiable so sparse-view training can
+        # apply DNGaussian-style depth supervision without another render.
+        "inv_depth": paste(rendered_invdepth, crop),
     }

@@ -32,6 +32,7 @@ from torch.utils.data import DataLoader
 
 import trimesh
 from utils.loss_utils import VGGLoss, l1_loss, ssim
+from dngaussian import global_local_depth_loss
 import sys
 from utils.general_utils import safe_state
 from tqdm import tqdm
@@ -102,6 +103,13 @@ def training(train_loader, warmup_loader, config, static_assets):
     bg_weight = config.train.bg_weight
     blur_weight = config.train.blur_weight
     lambda_dssim = config.train.lambda_dssim
+    depth_config = config.train.get("depth_regularization", {})
+    depth_enabled = bool(depth_config.get("enabled", False))
+    depth_weight = float(depth_config.get("weight", 0.0))
+    depth_start = int(depth_config.get("start_iteration", 1000))
+    depth_patch_size = int(depth_config.get("patch_size", 32))
+    depth_local_weight = float(depth_config.get("local_weight", 0.1))
+    depth_target_type = depth_config.get("target_type", "inverse_depth")
 
     measure_time = False
 
@@ -161,6 +169,7 @@ def training(train_loader, warmup_loader, config, static_assets):
         bg_loss = []
         blur_loss = []
         code_loss = []
+        depth_loss = []
 
         with cuda_timer("Iteration FORWARD", measure_time):
             # Batch processing
@@ -175,6 +184,7 @@ def training(train_loader, warmup_loader, config, static_assets):
                 optimizable_poses = garment_pkg["optimizable_poses"]
                 pred_silhouette = pkg["pred_silhouette"]
                 pred_image = pkg["pred_image"]
+                pred_inv_depth = pkg["pred_inv_depth"]
                 blur_weights = pkg["blur_weights"]
                 bg_color = pkg["bg_color"]
 
@@ -201,6 +211,34 @@ def training(train_loader, warmup_loader, config, static_assets):
                 sil_loss.append(sil_l1)
                 code_loss.append(code_reg + l2_poses)
                 scale_loss.append(garment_pkg["scale_energy"] * 175.0)
+
+                if depth_enabled and iteration >= depth_start:
+                    if "depth_prior" not in frame:
+                        raise RuntimeError(
+                            "Depth regularization is enabled, but the dataset did not provide "
+                            "depth_prior. Set data.depth_root to the cached depth directory."
+                        )
+                    target_depth = frame["depth_prior"]
+                    if depth_target_type == "depth":
+                        target_depth = target_depth.clamp_min(1e-6).reciprocal()
+                    elif depth_target_type != "inverse_depth":
+                        raise ValueError(
+                            "depth_regularization.target_type must be 'depth' or 'inverse_depth'"
+                        )
+                    valid_depth = (
+                        (frame["alpha"] > 0.5)
+                        & th.isfinite(target_depth)
+                        & (target_depth > 0)
+                    )
+                    depth_loss.append(
+                        global_local_depth_loss(
+                            pred_inv_depth,
+                            target_depth,
+                            valid_depth,
+                            patch_size=depth_patch_size,
+                            local_weight=depth_local_weight,
+                        )
+                    )
 
                 fm_energy = garment_pkg["fm_energy"]
                 if fm_energy is not None:
@@ -243,6 +281,11 @@ def training(train_loader, warmup_loader, config, static_assets):
                 vgg = th.stack(perceptual_loss).mean() * vgg_weight
                 loss += vgg
 
+            depth = 0
+            if len(depth_loss) > 0:
+                depth = th.stack(depth_loss).mean() * depth_weight
+                loss += depth
+
             losses = {
                 "color_loss": color_loss,
                 "sil_loss": sil_loss,
@@ -252,6 +295,7 @@ def training(train_loader, warmup_loader, config, static_assets):
                 "vgg_loss": vgg,
                 "bg_loss": bg_loss,
                 "codes_reg": code_loss,
+                "depth_loss": depth,
                 "total_loss": loss,
             }
 

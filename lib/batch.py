@@ -236,6 +236,9 @@ class Batcher:
                 "silhouette": self.get_silhouette(seg_part[i]),
             }
 
+            if "depth_prior" in batch:
+                frame["depth_prior"] = batch["depth_prior"][i].cuda().float()
+
             if "ao" in batch:
                 frame["ao"] = batch["ao"][i].cuda()
 
