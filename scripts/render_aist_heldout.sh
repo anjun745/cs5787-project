@@ -13,4 +13,4 @@ fi
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate d3ga
 cd "${PROJECT_DIR}"
-python test.py configs/aist_quick.yml "${1:-5000}"
+python test.py "${CONFIG:-configs/aist_quick.yml}" "${1:-5000}"

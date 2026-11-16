@@ -17,6 +17,7 @@ from lib.segmentation import Segmenter
 from lib.smplman import Smplman
 from lib.blueman import Blueman
 from models.trainer import Trainer
+from models.cor_gs import CoRGS
 from utils.data_utils import to_device
 
 from utils.timers import cuda_timer, cpu_timer
@@ -77,6 +78,144 @@ def seed_everything(seed=17):
     th.cuda.manual_seed(seed)
     th.cuda.manual_seed_all(seed)
 
+def field_losses(trainer, frames, iteration, config, vgg_loss):
+    """D3GA's training-view losses for one field (unchanged from the single-field loop)."""
+    rgb_weight = config.train.rgb_weight
+    vgg_weight = config.train.vgg_weight
+    fme_weight = config.train.fme_weight
+    sil_weight = config.train.sil_weight
+    bg_weight = config.train.bg_weight
+    blur_weight = config.train.blur_weight
+    lambda_dssim = config.train.lambda_dssim
+
+    pkgs = []
+    perceptual_loss = []
+    color_loss = []
+    fme_loss = []
+    scale_loss = []
+    sil_loss = []
+    bg_loss = []
+    blur_loss = []
+    code_loss = []
+
+    for frame in frames:
+        pkg = trainer.fit(frame)
+
+        # Precidtions
+        garment_pkg = pkg["garment_pkg"]
+        optimizable_poses = garment_pkg["optimizable_poses"]
+        pred_silhouette = pkg["pred_silhouette"]
+        pred_image = pkg["pred_image"]
+        blur_weights = pkg["blur_weights"]
+        bg_color = pkg["bg_color"]
+
+        gt_image = pkg["gt_image"]
+        gt_alpha = frame["alpha"].expand(3, -1, -1)
+        gt_silhouette = frame["silhouette"] * gt_alpha
+        gt_image = gt_image * gt_alpha + (1 - gt_alpha) * bg_color[:, None, None]
+
+        boundary_fg = 1. - frame['boundary_fg'].float()
+        gt_image = gt_image * boundary_fg + (1. - boundary_fg) * bg_color[:, None, None]
+        gt_silhouette = gt_silhouette * boundary_fg
+
+        rgb_l1 = l1_loss(pred_image, gt_image)
+        sil_l1 = l1_loss(pred_silhouette, gt_silhouette)
+        rgb_ssim = ssim(pred_image, gt_image)
+        color = (1.0 - lambda_dssim) * rgb_l1 + lambda_dssim * (1.0 - rgb_ssim)
+        blur_reg = (blur_weights - 1.0).abs().mean() if blur_weights is not None else -1
+        code_reg = th.mean(garment_pkg["frame_encoding"] ** 2) * 0.001
+        l2_poses = 0
+        if optimizable_poses is not None:
+            l2_poses = th.mean(th.mean(optimizable_poses**2, axis=-1)) * 0.0075
+
+        color_loss.append(color)
+        sil_loss.append(sil_l1)
+        code_loss.append(code_reg + l2_poses)
+        scale_loss.append(garment_pkg["scale_energy"] * 175.0)
+
+        fm_energy = garment_pkg["fm_energy"]
+        if fm_energy is not None:
+            fme_loss.append(fm_energy.mean(dim=0) + 3.0)  # loss is between -3, 3. Shift it to 0, 6
+
+        if blur_reg != -1:
+            blur_loss.append(blur_reg)
+
+        if iteration > config.train.enable_vgg_from and config.train.enable_vgg_from > 0:
+            vgg = vgg_loss(pred_image[None], gt_image[None])
+            perceptual_loss.append(vgg)
+
+        pkgs.append((pred_image.detach(), gt_image, pred_silhouette, gt_silhouette, garment_pkg, frame))
+
+    color_loss = th.stack(color_loss).mean() * rgb_weight
+    sil_loss = th.stack(sil_loss).mean() * sil_weight
+    code_loss = th.stack(code_loss).mean()
+    scale_loss = th.stack(scale_loss).mean()
+    bg_loss = th.stack(bg_loss).mean() * bg_weight if len(bg_loss) > 0 else 0
+
+    loss = 0
+    loss += color_loss
+    loss += sil_loss
+    loss += bg_loss
+    loss += code_loss
+    loss += scale_loss
+
+    fm = 0
+    if len(fme_loss) > 0:
+        fm = th.stack(fme_loss).mean() * fme_weight
+        loss += fm
+
+    blur = 0
+    if len(blur_loss) > 0:
+        blur = th.stack(blur_loss).mean() * blur_weight
+        loss += blur
+
+    vgg = 0
+    if len(perceptual_loss) > 0:
+        vgg = th.stack(perceptual_loss).mean() * vgg_weight
+        loss += vgg
+
+    losses = {
+        "color_loss": color_loss,
+        "sil_loss": sil_loss,
+        "scale_loss": scale_loss,
+        "fme_loss": fm,
+        "blur_loss": blur,
+        "vgg_loss": vgg,
+        "bg_loss": bg_loss,
+        "codes_reg": code_loss,
+        "total_loss": loss,
+    }
+
+    return loss, losses, pkgs
+
+
+def cor_gs_enabled(config):
+    return "cor_gs" in config and config.cor_gs.get("enabled", False)
+
+
+def build_trainers(config, static_assets):
+    """One Trainer for plain D3GA; two for CoR-GS.
+
+    Field 0 checkpoints to train.run_dir, so test.py evaluates it unchanged (the
+    paper keeps one field for inference). Field 1 checkpoints to
+    run_dir/cor_field1.
+    """
+    trainers = [Trainer(config, static_assets)]
+    if not cor_gs_enabled(config):
+        return trainers
+    if config.get("primitive_type", "cage") != "cage":
+        raise NotImplementedError("CoR-GS co-pruning is implemented for primitive_type: cage only")
+
+    field_config = copy.deepcopy(config)
+    field_config.train.run_dir = os.path.join(config.train.run_dir, "cor_field1")
+    os.makedirs(os.path.join(field_config.train.run_dir, "checkpoints"), exist_ok=True)
+    # A different seed gives field 1 its own Gaussian samples and initial weights,
+    # so the two fields can disagree.
+    seed_everything(config.cor_gs.get("seed", 17) + 1)
+    trainers.append(Trainer(field_config, static_assets))
+    return trainers
+
+
 def training(train_loader, warmup_loader, config, static_assets):
     tb_writer = prepare_output_and_logger(config)
 
@@ -91,23 +230,28 @@ def training(train_loader, warmup_loader, config, static_assets):
     vgg_loss = VGGLoss().cuda() if config.train.enable_vgg_from > 0 and config.train.vgg_weight > 0 else None
     pc_renderer = PCRenderer(bg_color == "white").cuda()
     mesh_renderer = Renderer(bg_color == "white").cuda()
-    trainer = Trainer(config, static_assets)
+    trainers = build_trainers(config, static_assets)
+    trainer = trainers[0]
     model = trainer.model
 
-    rgb_weight = config.train.rgb_weight
-    vgg_weight = config.train.vgg_weight
-    fme_weight = config.train.fme_weight
-    sil_weight = config.train.sil_weight
-    shadow_weight = config.train.shadow_weight
-    bg_weight = config.train.bg_weight
-    blur_weight = config.train.blur_weight
-    lambda_dssim = config.train.lambda_dssim
+    cor = None
+    if cor_gs_enabled(config):
+        cor = CoRGS(
+            config.cor_gs,
+            train_loader.dataset.cameras,
+            rgb_weight=config.train.rgb_weight,
+            seed=config.cor_gs.get("seed", 17),
+        )
+        logger.info("CoR-GS enabled: training two co-regularized fields")
 
     measure_time = False
 
     first_iter = 0
     iterations = config.train.iterations
-    first_iter = trainer.restore()
+    restored = [t.restore() for t in trainers]
+    first_iter = min(restored)
+    if len(set(restored)) > 1:
+        logger.warning(f"CoR-GS fields restored from different iterations {restored}; resuming from {first_iter}")
     progress_bar = tqdm(range(first_iter, iterations))
     first_iter += 1
     iteration = first_iter
@@ -138,7 +282,8 @@ def training(train_loader, warmup_loader, config, static_assets):
                     warmup_iter = iter(warmup_loader)
                 # exit(-1)
 
-        trainer.save(iteration)
+        for t in trainers:
+            t.save(iteration)
 
         frames = batcher.process(batch)
 
@@ -151,113 +296,35 @@ def training(train_loader, warmup_loader, config, static_assets):
 
         skipped_frames = 0
 
-        pkgs = []
-        perceptual_loss = []
-        color_loss = []
-        fme_loss = []
-        scale_loss = []
-        sil_loss = []
-        shadow_loss = []
-        bg_loss = []
-        blur_loss = []
-        code_loss = []
+        frames = [to_device(frame) for frame in frames]
+        for frame in frames:
+            frame["iteration"] = iteration
 
         with cuda_timer("Iteration FORWARD", measure_time):
-            # Batch processing
-            for frame in frames:
-                frame = to_device(frame)
-                frame["iteration"] = iteration
+            # Both fields see the same training view, as in CoR-GS
+            loss, losses, pkgs = field_losses(trainer, frames, iteration, config, vgg_loss)
 
-                pkg = trainer.fit(frame)
-
-                # Precidtions
-                garment_pkg = pkg["garment_pkg"]
-                optimizable_poses = garment_pkg["optimizable_poses"]
-                pred_silhouette = pkg["pred_silhouette"]
-                pred_image = pkg["pred_image"]
-                blur_weights = pkg["blur_weights"]
-                bg_color = pkg["bg_color"]
-
-                gt_image = pkg["gt_image"]
-                gt_alpha = frame["alpha"].expand(3, -1, -1)
-                gt_silhouette = frame["silhouette"] * gt_alpha
-                gt_image = gt_image * gt_alpha + (1 - gt_alpha) * bg_color[:, None, None]
-
-                boundary_fg = 1. - frame['boundary_fg'].float()
-                gt_image = gt_image * boundary_fg + (1. - boundary_fg) * bg_color[:, None, None]
-                gt_silhouette = gt_silhouette * boundary_fg
-
-                rgb_l1 = l1_loss(pred_image, gt_image)
-                sil_l1 = l1_loss(pred_silhouette, gt_silhouette)
-                rgb_ssim = ssim(pred_image, gt_image)
-                color = (1.0 - lambda_dssim) * rgb_l1 + lambda_dssim * (1.0 - rgb_ssim)
-                blur_reg = (blur_weights - 1.0).abs().mean() if blur_weights is not None else -1
-                code_reg = th.mean(garment_pkg["frame_encoding"] ** 2) * 0.001
-                l2_poses = 0
-                if optimizable_poses is not None:
-                    l2_poses = th.mean(th.mean(optimizable_poses**2, axis=-1)) * 0.0075
-
-                color_loss.append(color)
-                sil_loss.append(sil_l1)
-                code_loss.append(code_reg + l2_poses)
-                scale_loss.append(garment_pkg["scale_energy"] * 175.0)
-
-                fm_energy = garment_pkg["fm_energy"]
-                if fm_energy is not None:
-                    fme_loss.append(fm_energy.mean(dim=0) + 3.0)  # loss is between -3, 3. Shift it to 0, 6
-
-                if blur_reg != -1:
-                    blur_loss.append(blur_reg)
-
-                if iteration > config.train.enable_vgg_from and config.train.enable_vgg_from > 0:
-                    vgg = vgg_loss(pred_image[None], gt_image[None])
-                    perceptual_loss.append(vgg)
-
-                pkgs.append((pred_image.detach(), gt_image, pred_silhouette, gt_silhouette, garment_pkg, frame))
-
-            color_loss = th.stack(color_loss).mean() * rgb_weight
-            sil_loss = th.stack(sil_loss).mean() * sil_weight
-            code_loss = th.stack(code_loss).mean()
-            scale_loss = th.stack(scale_loss).mean()
-            bg_loss = th.stack(bg_loss).mean() * bg_weight if len(bg_loss) > 0 else 0
-
-            loss = 0
-            loss += color_loss
-            loss += sil_loss
-            loss += bg_loss
-            loss += code_loss
-            loss += scale_loss
-
-            fm = 0
-            if len(fme_loss) > 0:
-                fm = th.stack(fme_loss).mean() * fme_weight
-                loss += fm
-
-            blur = 0
-            if len(blur_loss) > 0:
-                blur = th.stack(blur_loss).mean() * blur_weight
-                loss += blur
-
-            vgg = 0
-            if len(perceptual_loss) > 0:
-                vgg = th.stack(perceptual_loss).mean() * vgg_weight
-                loss += vgg
-
-            losses = {
-                "color_loss": color_loss,
-                "sil_loss": sil_loss,
-                "scale_loss": scale_loss,
-                "fme_loss": fm,
-                "blur_loss": blur,
-                "vgg_loss": vgg,
-                "bg_loss": bg_loss,
-                "codes_reg": code_loss,
-                "total_loss": loss,
-            }
+            if cor is not None:
+                loss_f1, losses_f1, _ = field_losses(trainers[1], frames, iteration, config, vgg_loss)
+                pseudo, disagreement = cor.pseudo_loss(trainers, frames, iteration)
+                losses["f1_color_loss"] = losses_f1["color_loss"]
+                losses["f1_total_loss"] = loss_f1
+                if disagreement is not None:
+                    losses["cor_pseudo"] = disagreement
+                loss = loss + loss_f1 + pseudo
+                losses["total_loss"] = loss
 
             check_loss(losses, iteration)
 
-            trainer.step(loss, iteration)
+            loss.backward()
+            for t in trainers:
+                t.apply_gradients(iteration)
+
+        if cor is not None and cor.should_prune(iteration):
+            stats = cor.co_prune(trainers, frames[0])
+            logger.info(f"[ITER {iteration}] CoR-GS co-pruning: {stats}")
+            for key, value in stats.items():
+                tb_writer.add_scalar(key, value, iteration)
 
         with th.no_grad():
             n_log = config.train.log_n_steps
@@ -279,7 +346,8 @@ def training(train_loader, warmup_loader, config, static_assets):
         iteration += 1
 
     # Final model saved
-    trainer.save(name="model.pth")
+    for t in trainers:
+        t.save(name="model.pth")
 
 
 def prepare_output_and_logger(config):

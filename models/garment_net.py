@@ -246,6 +246,15 @@ class GarmentNet(nn.Module):
 
         return pkg
 
+    @th.no_grad()
+    def gaussian_centers(self, batch):
+        """Posed centres of the active Gaussians, one (N_k, 3) tensor per garment (CoR-GS co-pruning)."""
+        self.update_batch(batch)
+        self.get_additional_embedding(batch)
+        self.get_face_embedding(batch)
+        self.get_shadow(batch)
+        return [garment(batch)["means3D"] for garment in self.garments]
+
     def forward(self, batch):
         poses = self.update_batch(batch)
         self.get_additional_embedding(batch)

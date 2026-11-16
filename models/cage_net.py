@@ -76,6 +76,13 @@ class CageNet(nn.Module):
             self.features_dc = nn.Parameter(features[:, :, 0:1].transpose(1, 2).contiguous().requires_grad_(True))
             self.features_rest = nn.Parameter(features[:, :, 1:].transpose(1, 2).contiguous().requires_grad_(True))
 
+        # CoR-GS co-pruning. D3GA has a fixed Gaussian budget and no densification,
+        # so a pruned Gaussian is masked out of the forward pass (and therefore
+        # out of rendering and gradients) instead of being deleted. The mask is
+        # a buffer, so it is saved with checkpoints and honoured at test time.
+        self.register_buffer("active_mask", th.ones(points.shape[0], dtype=th.bool, device="cuda"))
+        self._refresh_active()
+
         self.scaling_activation = th.exp
         self.scaling_inverse_activation = th.log
         self.rotation_activation = th.nn.functional.normalize
@@ -84,6 +91,30 @@ class CageNet(nn.Module):
 
     def restore(self):
         pass
+
+    def _refresh_active(self):
+        self._active_idx = th.nonzero(self.active_mask, as_tuple=False).squeeze(1)
+        self._all_active = self._active_idx.numel() == self.active_mask.numel()
+
+    def n_active(self):
+        return int(self._active_idx.numel())
+
+    @th.no_grad()
+    def prune(self, drop):
+        """drop: bool tensor over the currently active Gaussians (forward order)."""
+        if drop.numel() != self._active_idx.numel():
+            raise ValueError(f"prune mask has {drop.numel()} entries, expected {self._active_idx.numel()}")
+        if drop.any():
+            self.active_mask[self._active_idx[drop]] = False
+            self._refresh_active()
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        # Checkpoints from before CoR-GS have no mask: treat every Gaussian as active.
+        key = prefix + "active_mask"
+        if key not in state_dict:
+            state_dict[key] = th.ones_like(self.active_mask)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+        self._refresh_active()
 
     def get_lr(self, name):
         default_lr = self.config.train.get(name, 0.001)
@@ -223,16 +254,11 @@ class CageNet(nn.Module):
         cov3D_precomp = strip_symmetric(cov3D)
 
         fm_energy = self.geometry.fem_energy(tetpoints).mean()[None]
-        scale_energy = th.mean(th.mean(scales**2, axis=1))[None]
 
         deformed = deformed_tetras[tetra_id]
 
         means3D = th.einsum("ikj,ik->ij", deformed, canon_barys)
-
-        n = means3D.size(0)
-        cam_pos = viewpoint_camera.camera_center[None].cuda().expand(n, -1).detach()
-        directions = means3D - cam_pos
-        viewdirs = directions / th.linalg.norm(directions, dim=-1, keepdims=True)
+        canonical_means3D = th.einsum("ikj,ik->ij", canon_tetpoints[tetra_faces][tetra_id], self.geometry.barys)
 
         shadow = None
         if "pred_ao" in batch:
@@ -240,13 +266,31 @@ class CageNet(nn.Module):
             ao = ao[tetra_id]
             shadow = th.einsum("ikj,ik->ij", ao, canon_barys)
 
+        # Drop Gaussians removed by CoR-GS co-pruning
+        def active(x):
+            return x if self._all_active or x is None else x[self._active_idx]
+
+        means3D = active(means3D)
+        canonical_means3D = active(canonical_means3D)
+        cov3D_precomp = active(cov3D_precomp)
+        scales = active(scales)
+        shadow = active(shadow)
+        color_feat = active(color_feat)
+
+        scale_energy = th.mean(th.mean(scales**2, axis=1))[None]
+
+        n = means3D.size(0)
+        cam_pos = viewpoint_camera.camera_center[None].cuda().expand(n, -1).detach()
+        directions = means3D - cam_pos
+        viewdirs = directions / th.linalg.norm(directions, dim=-1, keepdims=True)
+
         silhouette_rgb = self.silhouette_color[None].expand(n, -1)
 
         shs, rgb, opacities = None, None, None
 
         if self.use_SHS():
-            shs = self.get_features
-            opacities = self.get_opacity
+            shs = active(self.get_features)
+            opacities = active(self.get_opacity)
         else:
             rgb, opacities = self.color_field(
                 color_feat,
@@ -267,7 +311,7 @@ class CageNet(nn.Module):
             "cov3D_precomp": cov3D_precomp,
             "silhouette_rgb": silhouette_rgb,
             "means3D": means3D,
-            "canonical_means3D": th.einsum("ikj,ik->ij", canon_tetpoints[tetra_faces][tetra_id], self.geometry.barys),
+            "canonical_means3D": canonical_means3D,
             "color_feat": color_feat,
             "fm_energy": fm_energy,
             "scale_energy": scale_energy,

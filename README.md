@@ -179,6 +179,49 @@ motion raises the right arm, waves three times, and lowers it. The generated
 The avatar can also be driven by other valid SMPL motion sources, but poses far
 outside the training distribution may create appearance artifacts.
 
+## 7. CoR-GS co-regularization (optional)
+
+[CoR-GS](https://arxiv.org/abs/2405.12110) (Zhang et al., ECCV 2024) is a
+sparse-view regularizer. It trains two Gaussian fields side by side on the
+same views and suppresses the places where they disagree, on the assumption
+that disagreement marks an inaccurate reconstruction. Nine AIST++ cameras are a
+sparse rig, so the same idea applies to the avatar:
+
+- **Co-pruning (point disagreement).** Every 500 iterations, both fields are
+  posed on the current training frame. A Gaussian whose nearest Gaussian in the
+  other field is farther than `tau` is pruned.
+- **Pseudo-view co-regularization (rendering disagreement).** Each iteration
+  samples an unseen camera between a training camera and one of its two nearest
+  neighbours. Both fields render it, and the renders are pulled together with
+  `(1 - 0.2) * L1 + 0.2 * D-SSIM`, weighted 1:1 with the colour loss.
+
+Train and evaluate with the CoR-GS configuration:
+
+```bash
+CONFIG=configs/aist_quick_corgs.yml ./scripts/train_aist_quick.sh
+CONFIG=configs/aist_quick_corgs.yml ./scripts/render_aist_heldout.sh 5000
+```
+
+Runs go to `experiments/aist_quick_corgs/`, so they never overwrite the
+baseline. Field 0 is saved in the usual `checkpoints/` folder and is the field
+that `test.py` evaluates; as in the paper, one field is kept for inference.
+Field 1 is saved in `cor_field1/checkpoints/`. Each iteration runs two fields
+plus two pseudo-view renders, so training takes roughly 2-2.5x as long.
+
+Adaptations to D3GA (all settings are in the `cor_gs` block of the config):
+
+| Paper (static 3DGS) | Here (D3GA avatar) | Why |
+| --- | --- | --- |
+| Distance between Gaussian centres in the scene | Distance between posed centres on the current training frame | Gaussians move with the body; both fields are compared in the same pose. |
+| Pruned Gaussians are deleted | A persistent `active_mask` buffer removes them from rendering and gradients | D3GA has a fixed Gaussian budget with no densification, and the mask keeps checkpoint shapes fixed. |
+| `tau = 5` in scene units | `tau = 5` times the median Gaussian spacing | Units differ between datasets (AIST++ in metres, Goliath in mm). |
+| No cap on pruning | `max_ratio: 0.05` per event | Pruned Gaussians cannot regrow, so one bad event would be permanent. |
+| `P' = (t + eps, q)` | Camera position and rotation interpolated between a camera and a neighbour, plus noise of 5% of the baseline | Keeps the dancer in frame on a ring rig. Set `interpolate: false` for the paper's literal form. |
+| `L_color + 1.0 * R_pcolor` | `1.0 * rgb_weight * R_pcolor`, ramped in from iteration 500 to 1000 | D3GA scales its colour loss by `rgb_weight = 10`, so the pseudo-view weight is scaled to match. |
+
+The implementation is in `models/cor_gs.py`; masking is in
+`models/cage_net.py`. Older checkpoints load as "all Gaussians active".
+
 ## What to commit
 
 Commit source code, configuration, scripts, and this documentation. Do not

@@ -144,6 +144,16 @@ class Trainer:
             "bg_color": bg_color_cuda
         }
 
+    def render_view(self, frame, bg_color):
+        """Renders the RGB image only, e.g. for an unseen CoR-GS pseudo view.
+
+        The learnable blur and pixel bias model artefacts of real cameras, so
+        they are not applied here.
+        """
+        garment_pkg = self.model(frame)
+        garment_pkg["sh_degree"] = self.active_sh_degree
+        return render(frame, garment_pkg, bg_color=bg_color, solid_bg=not self.use_background)["render"]
+
     def get_optical_flow(self, image1, image2, scale_image=2):
         return self.model.flow_network(image1, image2, scale_image)
 
@@ -190,6 +200,10 @@ class Trainer:
 
     def step(self, loss, iteration):
         loss.backward()
+        self.apply_gradients(iteration)
+
+    def apply_gradients(self, iteration):
+        """Optimizer update after backward. CoR-GS backpropagates one joint loss, then updates every field."""
         th.nn.utils.clip_grad_norm_(self.model.parameters(), 2.5, foreach=True)
         self.optimizer.step()
         self.scheduler.step()
