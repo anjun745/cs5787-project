@@ -215,6 +215,19 @@ For a clean comparison, train a fresh baseline with `enabled: false` and an
 FSGS run with `enabled: true`, keeping all other settings and camera subsets
 identical.
 
+For a metrics-only evaluation without generating the comparison video, run:
+
+```bash
+python evaluate.py configs/aist_quick.yml 5000
+```
+
+The optional iteration argument selects the checkpoint to evaluate. If omitted,
+the script evaluates the latest checkpoint:
+
+```bash
+python evaluate.py configs/aist_quick.yml
+```
+
 ## What to commit
 
 Commit source code, configuration, scripts, and this documentation. Do not
