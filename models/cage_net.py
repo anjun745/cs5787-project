@@ -15,8 +15,8 @@ from torch import nn
 
 from utils.general_utils import build_scaling_rotation
 from utils.general_utils import strip_symmetric
-import torch.nn.functional as F
 from .mlp import DeformationField, CanonicalField, ColorField
+from .fsgs import unpool_gaussians as fsgs_unpool_gaussians
 from utils.general_utils import inverse_sigmoid
 from pytorch3d.ops import knn_points
 
@@ -84,6 +84,56 @@ class CageNet(nn.Module):
 
     def restore(self):
         pass
+
+    @staticmethod
+    def _expanded_parameter(parameter, appended):
+        if appended is None or appended.numel() == 0:
+            return parameter, parameter
+        expanded = nn.Parameter(
+            th.cat([parameter.detach(), appended.detach().to(parameter)], dim=0),
+            requires_grad=parameter.requires_grad,
+        )
+        return parameter, expanded
+
+    def prepare_for_checkpoint_state(self, state_dict, prefix):
+        """Resize Gaussian-indexed tensors before loading an expanded checkpoint."""
+        parameter_names = (
+            "colors_feat", "rotation", "scaling", "opacities",
+            "features_dc", "features_rest",
+        )
+        replacements = []
+        for name in parameter_names:
+            key = prefix + name
+            if not hasattr(self, name) or key not in state_dict:
+                continue
+            old_parameter = getattr(self, name)
+            target = state_dict[key]
+            if old_parameter.shape != target.shape:
+                new_parameter = nn.Parameter(
+                    th.empty_like(target, device=old_parameter.device),
+                    requires_grad=old_parameter.requires_grad,
+                )
+                setattr(self, name, new_parameter)
+                replacements.append((old_parameter, new_parameter))
+
+        buffer_names = (
+            "init_points", "init_rotations", "barys", "tetra_id",
+            "canonical_gradient",
+        )
+        for name in buffer_names:
+            key = prefix + "geometry." + name
+            if key not in state_dict:
+                continue
+            current = getattr(self.geometry, name)
+            target = state_dict[key]
+            if current.shape != target.shape:
+                setattr(self.geometry, name, th.empty_like(target, device=current.device))
+
+        return replacements
+
+    def unpool_gaussians(self, fsgs_config):
+        """Delegate FSGS Gaussian unpooling to the standalone module."""
+        return fsgs_unpool_gaussians(self, fsgs_config)
 
     def get_lr(self, name):
         default_lr = self.config.train.get(name, 0.001)

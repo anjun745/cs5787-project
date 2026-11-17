@@ -168,6 +168,16 @@ class Trainer:
 
                 logger.info(f"Initialized from {first_iter}th step!")
 
+                # FSGS changes the number of Gaussian-indexed parameters and
+                # geometry buffers. Resize the live modules before loading a
+                # checkpoint created after unpooling.
+                for index, garment in enumerate(self.model.garments):
+                    if hasattr(garment, "prepare_for_checkpoint_state"):
+                        prefix = f"garments.{index}."
+                        replacements = garment.prepare_for_checkpoint_state(model_dict, prefix)
+                        for old_parameter, new_parameter in replacements:
+                            self._replace_optimizer_parameter(old_parameter, new_parameter)
+
                 self.model.load_state_dict(model_dict, strict=strict)
                 if not self.is_eval:
                     self.optimizer.load_state_dict(opt_dict)
@@ -189,6 +199,61 @@ class Trainer:
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
+    def _replace_optimizer_parameter(self, old_parameter, new_parameter):
+        """Replace an expanded model parameter while preserving Adam state."""
+        found = False
+        for group in self.optimizer.param_groups:
+            params = group["params"]
+            for index, parameter in enumerate(params):
+                if parameter is old_parameter:
+                    params[index] = new_parameter
+                    found = True
+                    break
+            if found:
+                break
+
+        old_state = self.optimizer.state.pop(old_parameter, None)
+        if old_state is not None:
+            new_state = {}
+            for key, value in old_state.items():
+                if th.is_tensor(value) and value.shape == old_parameter.shape:
+                    extra_shape = (new_parameter.shape[0] - old_parameter.shape[0],) + value.shape[1:]
+                    extra = th.zeros(extra_shape, dtype=value.dtype, device=value.device)
+                    new_state[key] = th.cat([value, extra], dim=0)
+                else:
+                    new_state[key] = value
+            self.optimizer.state[new_parameter] = new_state
+
+        if not found:
+            # Some parameters (for example rotation/scale with use_shs=false)
+            # are registered on the model but intentionally not optimized.
+            logger.debug("Expanded parameter was not present in optimizer groups")
+
+    def maybe_unpool(self, iteration):
+        fsgs_config = self.config.train.get("fsgs", {})
+        if not bool(fsgs_config.get("enabled", False)):
+            return
+
+        start = int(fsgs_config.get("start_iteration", 1000))
+        interval = int(fsgs_config.get("interval", 1000))
+        final_iteration = int(self.config.train.iterations)
+        if (interval <= 0 or iteration < start or iteration >= final_iteration
+                or (iteration - start) % interval != 0):
+            return
+
+        total_added = 0
+        for garment in self.model.garments:
+            if not hasattr(garment, "unpool_gaussians"):
+                continue
+            previous_count = garment.colors_feat.shape[0]
+            replacements = garment.unpool_gaussians(fsgs_config)
+            for old_parameter, new_parameter in replacements:
+                self._replace_optimizer_parameter(old_parameter, new_parameter)
+            total_added += garment.colors_feat.shape[0] - previous_count
+
+        if total_added:
+            logger.info(f"[FSGS] Unpooling completed at iteration {iteration}")
+
     def step(self, loss, iteration):
         loss.backward()
         th.nn.utils.clip_grad_norm_(self.model.parameters(), 2.5, foreach=True)
@@ -196,6 +261,7 @@ class Trainer:
         self.scheduler.step()
         self.optimizer.zero_grad()
         self.oneupSHdegree(iteration)
+        self.maybe_unpool(iteration)
 
     def save(self, iteration=-1, name=None):
         if (iteration % self.config.train.checkpoint_n_steps != 0) and name is None:

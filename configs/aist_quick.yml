@@ -16,7 +16,7 @@ data:
   n_testing_frames: 20
 
 train:
-  tag: aist_quick
+  tag: aist_quick_fsgs
   run_dir: experiments/${.tag}/${capture_id}/body
   ckpt_dir: ${.run_dir}/checkpoints
   tb_dir: ${.run_dir}/tb
@@ -46,6 +46,17 @@ train:
   enable_vgg_from: -1
   iterations: 5000
 
+  # FSGS-inspired proximity-guided Gaussian unpooling.
+  # This adapts the unpooling component to D3GA's tetrahedral cage
+  # representation; pseudo-view and monocular-depth components are separate.
+  fsgs:
+    enabled: true
+    start_iteration: 1000
+    interval: 1000
+    knn_k: 4
+    proximity_percentile: 90.0
+    max_new_gaussians: 250
+
   optimizer:
     class_name: torch.optim.Adam
   lr_scheduler:
@@ -71,16 +82,6 @@ train:
   vgg_weight: 0.0
   blur_weight: 0.0
   bg_weight: 0.0
-
-  # DNGaussian-inspired sparse-view supervision. Generate cached priors,
-  # set data.depth_root above, then enable this block.
-  depth_regularization:
-    enabled: false
-    weight: 0.05
-    start_iteration: 1000
-    patch_size: 32
-    local_weight: 0.1
-    target_type: inverse_depth
 
 frame_embedder:
   n_dims: 16

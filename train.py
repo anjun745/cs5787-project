@@ -184,7 +184,7 @@ def training(train_loader, warmup_loader, config, static_assets):
                 optimizable_poses = garment_pkg["optimizable_poses"]
                 pred_silhouette = pkg["pred_silhouette"]
                 pred_image = pkg["pred_image"]
-                pred_inv_depth = pkg["pred_inv_depth"]
+                pred_inv_depth = pkg.get("pred_inv_depth")
                 blur_weights = pkg["blur_weights"]
                 bg_color = pkg["bg_color"]
 
@@ -213,18 +213,31 @@ def training(train_loader, warmup_loader, config, static_assets):
                 scale_loss.append(garment_pkg["scale_energy"] * 175.0)
 
                 if depth_enabled and iteration >= depth_start:
+                    if pred_inv_depth is None:
+                        raise RuntimeError(
+                            "Depth regularization is enabled, but the renderer "
+                            "did not return an inverse-depth prediction."
+                        )
+
                     if "depth_prior" not in frame:
                         raise RuntimeError(
                             "Depth regularization is enabled, but the dataset did not provide "
                             "depth_prior. Set data.depth_root to the cached depth directory."
                         )
-                    target_depth = frame["depth_prior"]
+
+                    target_depth = frame["depth_prior"].float()
                     if depth_target_type == "depth":
-                        target_depth = target_depth.clamp_min(1e-6).reciprocal()
+                        target_depth = th.where(
+                            target_depth > 0,
+                            1.0 / target_depth.clamp_min(1e-8),
+                            th.zeros_like(target_depth),
+                        )
                     elif depth_target_type != "inverse_depth":
                         raise ValueError(
-                            "depth_regularization.target_type must be 'depth' or 'inverse_depth'"
+                            f"Unsupported depth_regularization.target_type: {depth_target_type}. "
+                            "Expected 'inverse_depth' or 'depth'."
                         )
+
                     valid_depth = (
                         (frame["alpha"] > 0.5)
                         & th.isfinite(target_depth)
