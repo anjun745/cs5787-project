@@ -179,6 +179,42 @@ motion raises the right arm, waves three times, and lowers it. The generated
 The avatar can also be driven by other valid SMPL motion sources, but poses far
 outside the training distribution may create appearance artifacts.
 
+## 7. FSGS-style Gaussian unpooling (AIST++ cage experiment)
+
+The AIST++ quick configuration includes an experimental, D3GA-compatible
+implementation of **proximity-guided Gaussian unpooling**. It computes each
+Gaussian's mean distance to its nearest neighbors in canonical space and
+inserts new Gaussians between selected neighbors in locally sparse regions.
+To preserve D3GA deformation, each new midpoint is assigned to a valid
+cage tetrahedron and represented with barycentric coordinates. If neither
+parent tetrahedron contains the midpoint, the implementation falls back to
+the nearest tetrahedron and projects the barycentric weights onto its simplex.
+
+Enable or disable the experiment in `configs/aist_quick.yml`:
+
+```yaml
+train:
+  fsgs:
+    enabled: true
+    start_iteration: 1000
+    interval: 1000
+    knn_k: 4
+    proximity_percentile: 90.0
+    max_new_gaussians: 250
+```
+
+This is an **FSGS-inspired adaptation of its unpooling component**, not a full
+reproduction of FSGS. Pseudo-view generation and monocular-depth guidance are
+not included in this patch. The depth component should be coordinated with
+the separate DNGaussian implementation in the project team.
+
+The Gaussian count changes at the configured iterations. The trainer updates
+the optimizer parameter references and Adam state, and checkpoint loading
+resizes Gaussian-indexed tensors to match checkpoints saved after unpooling.
+For a clean comparison, train a fresh baseline with `enabled: false` and an
+FSGS run with `enabled: true`, keeping all other settings and camera subsets
+identical.
+
 ## What to commit
 
 Commit source code, configuration, scripts, and this documentation. Do not
