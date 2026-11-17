@@ -27,7 +27,7 @@ python dngaussian/scripts/generate_depth.py "$AIST_ROOT/prepared/gBR_sBM_cAll_d0
 data:
   depth_root: ${oc.env:AIST_ROOT}/prepared/gBR_sBM_cAll_d04_mBR0_ch01/depth
 train:
-  depth_weight: 0.05
+  depth_weight: 0.001
 ```
 
 The current AIST config trains on `c01`, `c04`, and `c07`, then evaluates on
