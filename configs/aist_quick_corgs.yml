@@ -1,0 +1,128 @@
+capture_id: gBR_sBM_cAll_d04_mBR0_ch01
+assets: runtime_assets/aist
+dataset_name: aist
+model_type: smpl
+is_smpl_body: true
+image_width: 960
+image_height: 540
+primitive_type: cage
+auto_build_cages: true
+
+data:
+  prepared_root: ${oc.env:AIST_ROOT}/prepared/gBR_sBM_cAll_d04_mBR0_ch01
+  camera_file: ${oc.env:AIST_ROOT}/annotations/cameras/setting1.json
+  smplx_model: ${oc.env:SMPL_MODEL}
+  joint_regressor: null
+  n_testing_frames: 20
+
+train:
+  tag: aist_quick_corgs
+  run_dir: experiments/${.tag}/${capture_id}/body
+  ckpt_dir: ${.run_dir}/checkpoints
+  tb_dir: ${.run_dir}/tb
+  max_sh_degree: 3
+  use_shs: false
+  test_camera: c01
+  fps: 60
+  eval_fps: 10
+  batch_size: 1
+  num_workers: 2
+  log_progress_n_steps: 100
+  log_n_steps: 10
+  checkpoint_n_steps: 250
+  erode_mask: false
+  close_holes: false
+  use_ao: false
+  use_gamma_space: false
+  use_color_calib: false
+  use_background: false
+  use_bg_network: false
+  use_blur: false
+  use_pixel_cal: false
+  use_face_rot: false
+  tet_offset_pre_lbs: true
+  use_opt_smplx: false
+  background: white
+  enable_vgg_from: -1
+  iterations: 5000
+
+  optimizer:
+    class_name: torch.optim.Adam
+  lr_scheduler:
+    class_name: torch.optim.lr_scheduler.MultiStepLR
+    milestones: [300, 450]
+    gamma: 0.33
+
+  lr: 0.001
+  deform_mlp_lr: 0.0005
+  canon_mlp_lr: 0.0005
+  color_mlp_lr: 0.0005
+  face_mlp_lr: 0.0005
+  feature_lr: 0.001
+  rotation_lr: 0.001
+  scaling_lr: 0.001
+  opacity_lr: 0.001
+
+  lambda_dssim: 0.2
+  rgb_weight: 10.0
+  sil_weight: 0.5
+  shadow_weight: 0.0
+  fme_weight: 0.0025
+  vgg_weight: 0.0
+  blur_weight: 0.0
+  bg_weight: 0.0
+
+frame_embedder:
+  n_dims: 16
+color_mlp:
+  n_layers: 3
+  n_nodes: 64
+  n_features: 32
+  use_pose: true
+  use_view_enc: true
+deform_mlp:
+  n_layers: 2
+  n_nodes: 64
+  scale: 0.1
+canon_mlp:
+  n_layers: 2
+  n_nodes: 64
+  scale_bary: 0.15
+  scale_rot: 0.15
+  scale_scale: 0.15
+shadow_mlp:
+  n_layers: 2
+  n_nodes: 64
+
+cages:
+  body:
+    label_id: [-1]
+    inflate: 0.01
+    n_target_tris: 3000
+    n_gaussians: 5000
+    node_scale: 0.05
+    color: blue
+
+# CoR-GS (Zhang et al., ECCV 2024): train two fields and suppress their
+# disagreement. Field 0 is saved to train.run_dir and is the one test.py
+# evaluates; field 1 is saved to train.run_dir/cor_field1. See models/cor_gs.py.
+cor_gs:
+  enabled: true
+  seed: 17
+  pseudo:                 # pseudo-view co-regularization (rendering disagreement)
+    weight: 1.0           # lambda_p (paper: 1.0), multiplied by train.rgb_weight
+    lambda_dssim: 0.2     # paper: 0.2
+    start: 500            # first iteration with the pseudo-view loss
+    ramp: 500             # linear ramp of the weight over this many iterations
+    end: -1               # -1 = until the end of training
+    every: 1
+    k_nearest: 2          # interpolate towards one of the 2 nearest training cameras
+    noise: 0.05           # std of eps, as a fraction of the camera baseline
+    interpolate: true     # false = paper's literal (t_i + eps, averaged q)
+  co_prune:               # co-pruning (point disagreement)
+    tau: 5.0              # paper: 5
+    relative_tau: true    # tau in units of the median Gaussian spacing
+    start: 1000
+    until: 4000
+    every: 500            # paper: every 5 densification steps (= 500 iterations in 3DGS)
+    max_ratio: 0.05       # prune at most this fraction of a field per event
