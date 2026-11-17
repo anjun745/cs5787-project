@@ -10,19 +10,21 @@ auto_build_cages: true
 
 data:
   prepared_root: ${oc.env:AIST_ROOT}/prepared/gBR_sBM_cAll_d04_mBR0_ch01
+  depth_root: ${.prepared_root}/depth
+  train_cameras: [c01, c04, c07]
   camera_file: ${oc.env:AIST_ROOT}/annotations/cameras/setting1.json
   smplx_model: ${oc.env:SMPL_MODEL}
   joint_regressor: null
   n_testing_frames: 20
 
 train:
-  tag: aist_quick
-  run_dir: experiments/${.tag}/${capture_id}/body
+  tag: aist_3cam_depth
+  run_dir: dngaussian/outputs/${.tag}/${capture_id}/body
   ckpt_dir: ${.run_dir}/checkpoints
   tb_dir: ${.run_dir}/tb
   max_sh_degree: 3
   use_shs: false
-  test_camera: c01
+  test_camera: c02
   fps: 60
   eval_fps: 10
   batch_size: 1
@@ -72,15 +74,8 @@ train:
   blur_weight: 0.0
   bg_weight: 0.0
 
-  # DNGaussian-inspired sparse-view supervision. Generate cached priors,
-  # set data.depth_root above, then enable this block.
-  depth_regularization:
-    enabled: false
-    weight: 0.05
-    start_iteration: 1000
-    patch_size: 32
-    local_weight: 0.1
-    target_type: inverse_depth
+  depth_weight: 0.001
+  depth_start: 1000
 
 frame_embedder:
   n_dims: 16

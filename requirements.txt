@@ -19,3 +19,4 @@ colour
 imageio
 scikit-image
 pillow-avif-plugin
+transformers>=4.45,<5

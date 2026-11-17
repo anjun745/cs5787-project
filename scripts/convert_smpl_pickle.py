@@ -45,6 +45,10 @@ def main():
         else:
             converted[key] = value
 
+    # tetra-sampler registers these buffers even for body-only SMPL models.
+    converted.setdefault("lmk_faces_idx", np.empty(0, dtype=np.int64))
+    converted.setdefault("lmk_bary_coords", np.empty((0, 3), dtype=np.float32))
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("wb") as handle:
         pickle.dump(converted, handle, protocol=pickle.HIGHEST_PROTOCOL)
