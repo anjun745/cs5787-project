@@ -103,13 +103,8 @@ def training(train_loader, warmup_loader, config, static_assets):
     bg_weight = config.train.bg_weight
     blur_weight = config.train.blur_weight
     lambda_dssim = config.train.lambda_dssim
-    depth_config = config.train.get("depth_regularization", {})
-    depth_enabled = bool(depth_config.get("enabled", False))
-    depth_weight = float(depth_config.get("weight", 0.0))
-    depth_start = int(depth_config.get("start_iteration", 1000))
-    depth_patch_size = int(depth_config.get("patch_size", 32))
-    depth_local_weight = float(depth_config.get("local_weight", 0.1))
-    depth_target_type = depth_config.get("target_type", "inverse_depth")
+    depth_weight = config.train.get("depth_weight", 0.0)
+    depth_start = config.train.get("depth_start", 1000)
 
     measure_time = False
 
@@ -139,12 +134,13 @@ def training(train_loader, warmup_loader, config, static_assets):
                     batch = next(warmup_iter)
                 else:
                     batch = next(train_iter)
-            except Exception as e:
-                logger.error(f"Iterator error {str(e)}")
-                train_iter = iter(train_loader)
-                if warmup_iter is not None:
+            except StopIteration:
+                if iteration > warmup_steps or warmup_iter is None:
+                    train_iter = iter(train_loader)
+                    batch = next(train_iter)
+                else:
                     warmup_iter = iter(warmup_loader)
-                # exit(-1)
+                    batch = next(warmup_iter)
 
         trainer.save(iteration)
 
@@ -184,7 +180,6 @@ def training(train_loader, warmup_loader, config, static_assets):
                 optimizable_poses = garment_pkg["optimizable_poses"]
                 pred_silhouette = pkg["pred_silhouette"]
                 pred_image = pkg["pred_image"]
-                pred_inv_depth = pkg["pred_inv_depth"]
                 blur_weights = pkg["blur_weights"]
                 bg_color = pkg["bg_color"]
 
@@ -212,31 +207,17 @@ def training(train_loader, warmup_loader, config, static_assets):
                 code_loss.append(code_reg + l2_poses)
                 scale_loss.append(garment_pkg["scale_energy"] * 175.0)
 
-                if depth_enabled and iteration >= depth_start:
-                    if "depth_prior" not in frame:
-                        raise RuntimeError(
-                            "Depth regularization is enabled, but the dataset did not provide "
-                            "depth_prior. Set data.depth_root to the cached depth directory."
-                        )
+                if depth_weight > 0 and iteration >= depth_start:
                     target_depth = frame["depth_prior"]
-                    if depth_target_type == "depth":
-                        target_depth = target_depth.clamp_min(1e-6).reciprocal()
-                    elif depth_target_type != "inverse_depth":
-                        raise ValueError(
-                            "depth_regularization.target_type must be 'depth' or 'inverse_depth'"
-                        )
                     valid_depth = (
                         (frame["alpha"] > 0.5)
-                        & th.isfinite(target_depth)
                         & (target_depth > 0)
                     )
                     depth_loss.append(
                         global_local_depth_loss(
-                            pred_inv_depth,
+                            pkg["pred_inv_depth"],
                             target_depth,
                             valid_depth,
-                            patch_size=depth_patch_size,
-                            local_weight=depth_local_weight,
                         )
                     )
 
@@ -489,7 +470,7 @@ def create_loader(config):
     return train_loader, warmup_loader, static_assets
 
 if __name__ == "__main__":
-    config = config = OmegaConf.load(sys.argv[1])
+    config = OmegaConf.merge(OmegaConf.load(sys.argv[1]), OmegaConf.from_dotlist(sys.argv[2:]))
 
     if not os.path.isabs(config.assets):
         config.assets = os.path.abspath(config.assets)

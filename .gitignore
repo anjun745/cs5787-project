@@ -15,6 +15,7 @@ runs_train_py
 pose_pca/*
 experiments/*
 /outputs/
+/dngaussian/outputs/
 /runtime_assets/
 /body_models/
 *.egg-info/

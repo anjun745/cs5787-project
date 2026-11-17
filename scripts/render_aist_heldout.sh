@@ -13,4 +13,8 @@ fi
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate d3ga
 cd "${PROJECT_DIR}"
-python test.py configs/aist_quick.yml "${1:-5000}"
+iteration="${1:-5000}"
+if [[ $# -gt 0 ]]; then
+    shift
+fi
+python test.py configs/aist_quick.yml "${iteration}" "$@"

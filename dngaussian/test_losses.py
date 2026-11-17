@@ -22,3 +22,11 @@ def test_background_is_ignored_and_gradients_flow():
     loss.backward()
     assert torch.isfinite(prediction.grad).all()
     assert prediction.grad[:, :2].abs().sum().item() == 0
+
+
+def test_constant_prediction_has_finite_gradients():
+    prediction = torch.zeros(1, 64, 64, requires_grad=True)
+    target = torch.rand_like(prediction)
+    mask = torch.ones_like(prediction, dtype=torch.bool)
+    global_local_depth_loss(prediction, target, mask).backward()
+    assert torch.isfinite(prediction.grad).all()

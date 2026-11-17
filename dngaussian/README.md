@@ -7,8 +7,7 @@ and neural color renderer.
 
 ## Depth-prior layout
 
-Generate one single-channel depth or inverse-depth array per prepared AIST++
-image. The loader expects:
+Generate one single-channel inverse-depth `.npy` file per prepared image:
 
 ```text
 <depth_root>/
@@ -18,21 +17,47 @@ image. The loader expects:
   ...
 ```
 
-The filename is the original AIST++ frame number used under `images/`.
-Floating-point `.npy` files are preferred. PNG priors are also supported by
-setting `data.depth_format: png`.
+The filename is the original AIST++ frame number. Set the root and loss weight:
 
-Add the root to the AIST config:
+```bash
+python dngaussian/scripts/generate_depth.py "$AIST_ROOT/prepared/gBR_sBM_cAll_d04_mBR0_ch01"
+```
 
 ```yaml
 data:
   depth_root: ${oc.env:AIST_ROOT}/prepared/gBR_sBM_cAll_d04_mBR0_ch01/depth
-  depth_format: npy
+train:
+  depth_weight: 0.05
 ```
 
-Then set `train.depth_regularization.enabled: true`. Use `target_type: depth`
-for metric/forward depth, or `target_type: inverse_depth` for disparity-like
-monocular predictions. Training fails early if an enabled prior is missing.
+The current AIST config trains on `c01`, `c04`, and `c07`, then evaluates on
+the unseen `c02` camera.
+
+Run the matching baseline and depth experiments with:
+
+```bash
+./dngaussian/scripts/train_baseline.sh
+./dngaussian/scripts/train_depth.sh
+```
+
+After both runs finish, render the held-out camera and poses:
+
+```bash
+./dngaussian/scripts/evaluate.sh baseline
+./dngaussian/scripts/evaluate.sh depth
+python dngaussian/scripts/compare.py
+```
+
+Both runs write under `dngaussian/outputs/`:
+
+```text
+dngaussian/outputs/
+  aist_3cam_baseline/gBR_sBM_cAll_d04_mBR0_ch01/body/
+  aist_3cam_depth/gBR_sBM_cAll_d04_mBR0_ch01/body/
+```
+
+The generated depth maps stay under the AIST++ dataset directory because they
+are cached input data, not model output.
 
 ## Current scope
 
@@ -41,7 +66,4 @@ the loss compares it with the prior inside the foreground mask. Global
 normalization constrains broad body shape; non-overlapping local patches
 constrain smaller surface changes without trusting monocular scale or offset.
 
-This stage does not implement DNGaussian's hard-opacity and opacity-only
-passes. D3GA centers are outputs of a shared cage/deformation network rather
-than independent parameters, so those passes require explicit gradient
-routing or bounded per-Gaussian canonical offsets before they are safe.
+Hard/soft optimization is intentionally out of scope for this first test.

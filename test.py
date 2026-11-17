@@ -342,7 +342,7 @@ if __name__ == "__main__":
     iteration = None
     if len(sys.argv) > 2:
         iteration = sys.argv[2]
-    config = config = OmegaConf.load(config_path)
+    config = OmegaConf.merge(OmegaConf.load(config_path), OmegaConf.from_dotlist(sys.argv[3:]))
     if not os.path.isabs(config.assets):
         config.assets = os.path.abspath(config.assets)
     run_name = Path(config_path).stem

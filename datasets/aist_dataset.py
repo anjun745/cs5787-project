@@ -16,8 +16,8 @@ class AISTDataset(Dataset):
         camera_file,
         n_testing_frames=20,
         test_camera="c01",
+        train_cameras=None,
         depth_root=None,
-        depth_format="npy",
         eval=False,
         warmup=False,
         **kwargs,
@@ -27,7 +27,6 @@ class AISTDataset(Dataset):
         self.warmup = warmup
         self.test_camera = test_camera
         self.depth_root = Path(depth_root) if depth_root else None
-        self.depth_format = depth_format.lstrip(".")
         self.internal_counter = 0
         self.warmup_idx = 0
 
@@ -69,6 +68,9 @@ class AISTDataset(Dataset):
         self.cam2idx = {name: i for i, name in enumerate(self.cameras)}
         if self.test_camera not in self.cameras:
             raise ValueError(f"Unknown test camera {self.test_camera}; choose from {list(self.cameras)}")
+        self.train_cameras = train_cameras or list(self.cameras)
+        if not set(self.train_cameras) <= set(self.cameras):
+            raise ValueError(f"Unknown training camera in {self.train_cameras}")
 
     def n_cameras(self):
         return len(self.cameras)
@@ -98,7 +100,7 @@ class AISTDataset(Dataset):
         self.internal_counter += 1
 
         frame = self.frame_list[idx]
-        camera_id = self.test_camera if self.eval else np.random.choice(list(self.cameras))
+        camera_id = self.test_camera if self.eval else np.random.choice(self.train_cameras)
         image_path = self.root / "images" / camera_id / f"{frame:06d}.jpg"
         mask_path = self.root / "masks" / camera_id / f"{frame:06d}.png"
         image_bgr = cv2.imread(str(image_path))
@@ -136,23 +138,12 @@ class AISTDataset(Dataset):
         sample.update(self.cameras[camera_id])
 
         if self.depth_root is not None:
-            depth_path = self.depth_root / camera_id / f"{frame:06d}.{self.depth_format}"
-            if not depth_path.exists():
-                raise FileNotFoundError(f"Missing depth prior: {depth_path}")
-            if self.depth_format == "npy":
-                depth = np.load(depth_path).astype(np.float32)
-            else:
-                depth = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
-                if depth is None:
-                    raise FileNotFoundError(f"Could not read depth prior: {depth_path}")
-                depth = depth.astype(np.float32)
-            if depth.ndim == 3:
-                depth = depth[..., 0]
+            depth_path = self.depth_root / camera_id / f"{frame:06d}.npy"
+            depth = np.load(depth_path).astype(np.float32)
             if depth.shape != foreground.shape[-2:]:
-                depth = cv2.resize(
-                    depth,
-                    (foreground.shape[-1], foreground.shape[-2]),
-                    interpolation=cv2.INTER_LINEAR,
+                raise ValueError(
+                    f"Depth shape {depth.shape} does not match image shape "
+                    f"{foreground.shape[-2:]}: {depth_path}"
                 )
             sample["depth_prior"] = depth[None]
 
